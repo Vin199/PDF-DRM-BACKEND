@@ -1,0 +1,7 @@
+region         = "ap-south-1"
+bucket_name    = "pdf-drm-content-yourname"
+vpc_id         = "vpc-xxxxxxxxxxxxx"
+subnet_id      = "subnet-xxxxxxxxxxxxx"
+ec2_key_name   = "your-ec2-keypair-name"
+your_ip        = "1.2.3.4/32"
+ami_id         = "ami-0dee22c13ea7a9a67"  # Ubuntu 24.04 LTS for ap-south-1

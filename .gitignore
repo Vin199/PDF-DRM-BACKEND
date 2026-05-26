@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.local
+data/
+storage/
+uploads/
+temp/
+infra/keys/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.log
+.DS_Store
+dist/
+*.pem
+*.key
