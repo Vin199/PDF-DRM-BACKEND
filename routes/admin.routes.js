@@ -10,10 +10,10 @@ import { verifyToken } from '../middleware/auth.middleware.js';
 import {
   storagePaths,
   getMasterKey,
-  generateAssetKey,
+  generateContentKey,
+  wrapContentKey,
   encryptData,
-  saveEncryptedPage,
-  saveManifest
+  saveEncryptedPDF
 } from '../config/storage.js';
 
 const router = express.Router();
@@ -141,69 +141,38 @@ router.post('/upload', verifyToken, isAdmin, upload.single('pdf'), async (req, r
 
     console.log(`PDF has ${totalPages} pages`);
 
-    // Get master key and generate asset-specific key
+    // Generate random content key for this PDF
+    const contentKey = generateContentKey();
+    const iv = crypto.randomBytes(12); // GCM uses 12-byte IV
+
+    // Encrypt entire PDF with content key using AES-256-GCM
+    console.log('Encrypting PDF with content key...');
+    const encryptedPDF = encryptData(pdfBytes, contentKey, iv);
+
+    // Save encrypted PDF
+    saveEncryptedPDF(assetId, encryptedPDF);
+
+    // Wrap content key with master key (envelope encryption)
     const masterKey = getMasterKey();
-    const assetKey = generateAssetKey(masterKey, assetId);
-    const iv = crypto.randomBytes(16);
+    const wrappedContentKey = wrapContentKey(contentKey, masterKey);
 
-    // Process and encrypt each page
-    console.log('Encrypting pages...');
-    const manifest = {
-      assetId,
-      title,
-      totalPages,
-      pages: []
-    };
-
-    for (let i = 0; i < totalPages; i++) {
-      const pageNum = i + 1;
-
-      // Create single-page PDF
-      const singlePageDoc = await PDFDocument.create();
-      const [copiedPage] = await singlePageDoc.copyPages(pdfDoc, [i]);
-      singlePageDoc.addPage(copiedPage);
-      const singlePageBytes = await singlePageDoc.save();
-
-      // Derive page-specific key
-      const pageKey = crypto.createHash('sha256')
-        .update(assetKey)
-        .update(`page-${pageNum}`)
-        .digest();
-
-      // Encrypt page
-      const encryptedPage = encryptData(singlePageBytes, pageKey, iv);
-
-      // Save encrypted page
-      saveEncryptedPage(assetId, pageNum, encryptedPage);
-
-      manifest.pages.push({
-        pageNum,
-        size: encryptedPage.length
-      });
-
-      // Zero out sensitive data
-      pageKey.fill(0);
-    }
-
-    // Save manifest
-    saveManifest(assetId, manifest);
-
-    // Store metadata in database
+    // Store metadata in database with wrapped content key
     const stmt = db.prepare(`
-      INSERT INTO assets (id, title, iv, total_pages, file_size, status)
-      VALUES (?, ?, ?, ?, ?, 'ready')
+      INSERT INTO assets (id, title, wrapped_content_key, iv, total_pages, file_size, status)
+      VALUES (?, ?, ?, ?, ?, ?, 'ready')
     `);
 
     stmt.run(
       assetId,
       title,
+      wrappedContentKey,
       iv.toString('hex'),
       totalPages,
       pdfBytes.length
     );
 
-    // Cleanup
-    assetKey.fill(0);
+    // Zero out sensitive data from memory
+    contentKey.fill(0);
     masterKey.fill(0);
     fs.unlinkSync(tempFilePath);
 

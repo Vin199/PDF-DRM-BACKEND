@@ -53,18 +53,67 @@ export function generateAssetKey(masterKey, assetId) {
   );
 }
 
-// Encrypt data using AES-256-CBC
-export function encryptData(data, key, iv) {
-  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-  const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);
-  return encrypted;
+// Generate random content key for envelope encryption
+export function generateContentKey() {
+  return crypto.randomBytes(32); // 256-bit key for AES-256-GCM
 }
 
-// Decrypt data using AES-256-CBC
+// Wrap content key with master key using AES-256-GCM
+export function wrapContentKey(contentKey, masterKey) {
+  const iv = crypto.randomBytes(12); // GCM uses 12-byte IV
+  const cipher = crypto.createCipheriv('aes-256-gcm', masterKey, iv);
+
+  const encrypted = Buffer.concat([
+    cipher.update(contentKey),
+    cipher.final()
+  ]);
+
+  const authTag = cipher.getAuthTag();
+
+  // Return iv + authTag + encrypted combined
+  return Buffer.concat([iv, authTag, encrypted]).toString('base64');
+}
+
+// Unwrap content key with master key
+export function unwrapContentKey(wrappedKey, masterKey) {
+  const buffer = Buffer.from(wrappedKey, 'base64');
+
+  const iv = buffer.slice(0, 12);
+  const authTag = buffer.slice(12, 28);
+  const encrypted = buffer.slice(28);
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', masterKey, iv);
+  decipher.setAuthTag(authTag);
+
+  const contentKey = Buffer.concat([
+    decipher.update(encrypted),
+    decipher.final()
+  ]);
+
+  return contentKey;
+}
+
+// Encrypt data using AES-256-GCM
+export function encryptData(data, key, iv) {
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+
+  // Return encrypted + authTag combined
+  return Buffer.concat([encrypted, authTag]);
+}
+
+// Decrypt data using AES-256-GCM
 export function decryptData(encryptedData, key, iv) {
-  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+  // Last 16 bytes are auth tag
+  const encrypted = encryptedData.slice(0, -16);
+  const authTag = encryptedData.slice(-16);
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
+
   const decrypted = Buffer.concat([
-    decipher.update(encryptedData),
+    decipher.update(encrypted),
     decipher.final()
   ]);
   return decrypted;
@@ -75,7 +124,45 @@ export function getAssetPath(assetId) {
   return path.join(storagePaths.encrypted, assetId);
 }
 
-// Save encrypted page
+// Save encrypted PDF (entire file)
+export function saveEncryptedPDF(assetId, encryptedData) {
+  const assetDir = getAssetPath(assetId);
+  if (!fs.existsSync(assetDir)) {
+    fs.mkdirSync(assetDir, { recursive: true });
+  }
+
+  const pdfPath = path.join(assetDir, 'content.enc');
+  fs.writeFileSync(pdfPath, encryptedData);
+  return pdfPath;
+}
+
+// Read entire encrypted PDF
+export function readEncryptedPDF(assetId) {
+  const pdfPath = path.join(getAssetPath(assetId), 'content.enc');
+  if (!fs.existsSync(pdfPath)) {
+    throw new Error('Encrypted PDF not found');
+  }
+  return fs.readFileSync(pdfPath);
+}
+
+// Read chunk of encrypted PDF (for streaming)
+export function readEncryptedPDFChunk(assetId, start, end) {
+  const pdfPath = path.join(getAssetPath(assetId), 'content.enc');
+  if (!fs.existsSync(pdfPath)) {
+    throw new Error('Encrypted PDF not found');
+  }
+
+  const fileHandle = fs.openSync(pdfPath, 'r');
+  const length = end ? (end - start + 1) : undefined;
+  const buffer = Buffer.alloc(length || fs.statSync(pdfPath).size - start);
+
+  fs.readSync(fileHandle, buffer, 0, buffer.length, start);
+  fs.closeSync(fileHandle);
+
+  return buffer;
+}
+
+// Save encrypted page (legacy - for backward compatibility)
 export function saveEncryptedPage(assetId, pageNum, encryptedData) {
   const assetDir = getAssetPath(assetId);
   if (!fs.existsSync(assetDir)) {
@@ -87,7 +174,7 @@ export function saveEncryptedPage(assetId, pageNum, encryptedData) {
   return pagePath;
 }
 
-// Read encrypted page
+// Read encrypted page (legacy - for backward compatibility)
 export function readEncryptedPage(assetId, pageNum) {
   const pagePath = path.join(getAssetPath(assetId), `page-${pageNum}.enc`);
   if (!fs.existsSync(pagePath)) {
@@ -123,4 +210,46 @@ export function deleteAsset(assetId) {
   if (fs.existsSync(assetDir)) {
     fs.rmSync(assetDir, { recursive: true, force: true });
   }
+}
+
+// Generate HMAC signed URL
+export function generateSignedURL(assetId, expiryMinutes = 15) {
+  const signingSecret = process.env.SIGNING_SECRET || 'default-signing-secret-change-me';
+  const expires = Date.now() + (expiryMinutes * 60 * 1000);
+
+  const message = `${assetId}:${expires}`;
+  const signature = crypto
+    .createHmac('sha256', signingSecret)
+    .update(message)
+    .digest('hex');
+
+  return {
+    token: signature,
+    expires
+  };
+}
+
+// Verify HMAC signed URL
+export function verifySignedURL(assetId, token, expires) {
+  const signingSecret = process.env.SIGNING_SECRET || 'default-signing-secret-change-me';
+
+  // Check expiry
+  if (Date.now() > expires) {
+    return { valid: false, reason: 'expired' };
+  }
+
+  // Recompute signature
+  const message = `${assetId}:${expires}`;
+  const expectedSignature = crypto
+    .createHmac('sha256', signingSecret)
+    .update(message)
+    .digest('hex');
+
+  // Timing-safe comparison
+  const valid = crypto.timingSafeEqual(
+    Buffer.from(token, 'hex'),
+    Buffer.from(expectedSignature, 'hex')
+  );
+
+  return { valid, reason: valid ? null : 'invalid_signature' };
 }

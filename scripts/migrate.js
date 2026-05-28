@@ -20,11 +20,24 @@ try {
     CREATE TABLE IF NOT EXISTS assets (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
+      wrapped_content_key TEXT NOT NULL,
       iv TEXT NOT NULL,
       total_pages INTEGER NOT NULL,
       file_size INTEGER,
       status TEXT DEFAULT 'ready',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Device keys table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS device_keys (
+      user_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      public_key TEXT NOT NULL,
+      registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, device_id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
 

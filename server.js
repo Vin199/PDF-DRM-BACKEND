@@ -6,6 +6,9 @@ import authRoutes from './routes/auth.routes.js';
 import contentRoutes from './routes/content.routes.js';
 import licenseRoutes from './routes/license.routes.js';
 import adminRoutes from './routes/admin.routes.js';
+import deviceRoutes from './routes/device.routes.js';
+import playRoutes from './routes/play.routes.js';
+import contentServeRoutes from './routes/content-serve.routes.js';
 
 dotenv.config();
 
@@ -32,6 +35,9 @@ app.use('/auth', authRoutes);
 app.use('/content', contentRoutes);
 app.use('/license', licenseRoutes);
 app.use('/admin', adminRoutes);
+app.use('/device', deviceRoutes);
+app.use('/play', playRoutes);
+app.use('/serve', contentServeRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
